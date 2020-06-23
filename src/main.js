@@ -261,9 +261,42 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                     })
                 }
             }
-
         }
 
+        function sellMelons() {
+            if (bot.currentWindow?.title.indexOf("Магазин обменник") > -1) {
+                if (bot.inventory.count(103) > 8) {
+                    bot.clickWindow(15, 2, 3, () => {
+                        bot.closeWindow(bot.currentWindow)
+                    })
+                }
+            } else {
+                bot.chat("/shop exchanger2")
+            }
+        }
+
+        bot.on("windowClose", (window) => {
+            if (window.title.indexOf("Магазин обменник") > -1) {
+                if (bot.inventory.count(388) > 1) {
+                    let l = []
+                    bot.inventory.slots.filter(r => r).filter(r => r.type === 388).forEach(r => l.push(r))
+
+                    function drop() {
+                        let item = l.pop()
+                        bot.tossStack(item, () => {
+                            if (l.length > 0) {
+                                drop()
+                            } else if (bot.inventory.count(103) > 8) {
+                                sellMelons()
+                            }
+                        })
+                    }
+                    drop()
+                }
+            }
+        })
+
+        r.context.sellMelons = sellMelons
         r.context.findDirtInPositions = findDirtInPositions
         r.context.mcData = mcData
         r.context.sellBlocks = sellBlocks
@@ -294,6 +327,8 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 }
             } else if (window.title.indexOf("Уровень острова") > -1) {
                 sellBlocks()
+            } else if (window.title.indexOf("Магазин обменник") > -1) {
+                sellMelons()
             }
         }
 
