@@ -11,6 +11,7 @@ const term = require('terminal-kit').terminal;
 const blockFinderPlugin = require('mineflayer-blockfinder')(mineflayer);
 
 let connection_interval = null
+let chest_selling = false
 
 const accounts = require("../accounts.json")
 /*
@@ -53,6 +54,113 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
     r.context.v = vec3;
 
     function bind_bot(bot) {
+        bot.clickWindowPromise = (slot, button, mode) => {
+            return new Promise((resolve, reject) => {
+                bot.clickWindow(slot, button, mode, err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
+        }
+
+        bot.tossStackPromise = (item) => {
+            return new Promise((resolve, reject) => {
+                bot.tossStack(item, err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
+        }
+
+        bot.fishPromise = () => {
+            return new Promise((resolve, reject) => {
+                bot.fish(err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
+        }
+
+        bot.equipPromise = (item, destination) => {
+            return new Promise((resolve, reject) => {
+                bot.equip(item, destination, err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
+        }
+
+        bot.closeWindowPromise = (window) => {
+            return new Promise(resolve => {
+                let tmp_func = (window1) => {
+                    if (window.id === window1.id) {
+                        bot.removeListener("windowClose", tmp_func)
+                        resolve()
+                    }
+                }
+                bot.on("windowClose", tmp_func)
+                bot.closeWindow(window)
+            })
+        }
+
+        bot.openChestPromise = (chestBlock) => {
+            return new Promise((resolve) => {
+                let chest
+                let tmp_func = (window) => {
+                    if (window.type === "minecraft:chest") {
+                        bot.removeListener("windowOpen", tmp_func)
+                        chest.window = window
+                        chest.closePromise = () => bot.closeWindowPromise(window)
+
+                        chest.depositPromise = (itemType, metadata, count) => {
+                            return new Promise(resolve1 => {
+                                chest.deposit(itemType, metadata, count, () => {
+                                    resolve1()
+                                })
+                            })
+                        }
+
+                        chest.withdrawPromise = (itemType, metadata, count) => {
+                            return new Promise(resolve1 => {
+                                chest.withdraw(itemType, metadata, count, () => {
+                                    resolve1()
+                                })
+                            })
+                        }
+
+                        resolve(chest)
+                    }
+                }
+                bot.on("windowOpen", tmp_func)
+                chest = bot.openChest(chestBlock)
+            })
+        }
+
+        bot.waitWindowPromise = (condition, initial = () => {}) => {
+            return new Promise(resolve => {
+                let tmp_func = (window) => {
+                    if (condition(window)) {
+                        bot.removeListener("windowOpen", tmp_func)
+                        resolve(window)
+                    }
+                }
+                bot.on("windowOpen", tmp_func)
+                initial()
+            })
+        }
+
         const whisper_commands = [
             {
                 command: "подойди",
@@ -132,11 +240,15 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 clearInterval(connection_interval)
                 connection_interval = null
             } else {
-                connection_interval = setInterval(clickCompas, 250)
+                connection_interval = setInterval(clickCompas, 500)
             }
         }
 
         switchConnection()
+
+        bot.on("scoreboardTitleChanged", (scoreboard) => {
+            console.log(scoreboard)
+        })
 
         setInterval(() => {
             if (bot.scoreboard[1]?.title.indexOf("DivineCraft") > -1 && !connection_interval) {
@@ -167,40 +279,38 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             }
         }
 
-        function startFish() {
-            bot.equip(mcData.itemsByName.fishing_rod.id, 'hand', err => {
-                if (err) {
-                    console.error(err)
-                } else {
-                    const fish = () => {
-                        bot.fish(err => {
-                            if (err) {
-                                console.error(err)
-                            }
-                            setTimeout(fish, 100)
-                        })
+        async function startFish() {
+            // new code
+            while (bot.inventory.count(mcData.itemsByName.fishing_rod.id) > 0) {
+                while (bot.heldItem.type !== mcData.itemsByName.fishing_rod.id) {
+                    try {
+                        await bot.equipPromise(mcData.itemsByName.fishing_rod.id, "hand")
+                    } catch (e) {
+                        console.error(e)
                     }
-                    fish()
                 }
-            })
+                try {
+                    await bot.fishPromise()
+                    await setTimeout(() => {
+                    }, 50)
+                } catch (e) {
+                    console.error(e)
+                }
+            }
         }
 
         function sellBlocks() {
             if (bot.currentWindow?.title.indexOf("Уровень острова") > -1) {
                 function sell(slot) {
-                    return resolve => {
-                        bot.clickWindow(slot, 0, 0, () => {
-                            bot.clickWindow(22, 0, 0, () => {
-                                resolve()
-                            })
-                        })
-                    }
+                    return bot.clickWindowPromise(slot, 0, 0).then(() => {
+                        bot.clickWindowPromise(22, 0, 0)
+                    })
                 }
 
                 var p = Promise.resolve();
                 bot.currentWindow?.slots.forEach(r => {
                     if ([133, 57, 42, 41, 152, 22, 173, 155].includes(r?.type)) {
-                        p = p.then(() => new Promise(sell(r.slot)));
+                        p = p.then(() => sell(r.slot));
                     }
                 })
                 p.then(() => bot.closeWindow(bot?.currentWindow))
@@ -209,22 +319,55 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             }
         }
 
-        function dropAll() {
-            function drop(item) {
-                return (resolve, reject) => {
-                    bot.tossStack(item, err => {
-                        if (err) {
-                            reject(err)
-                        }
-                        resolve();
-                    })
-                }
-            }
+        async function clearChestSellMelonsPutChest(chestBlockClear, chestBlockPut) {
+            chest_selling = true
+            let free_slots
+            let chestClear
+            let chestPut
+            let count
 
+            // Цикл пока chest_selling
+            while (chest_selling) {
+
+                // Счистка арбузов
+                free_slots = bot.inventory.slots.filter((r, i) => r === null && (45 >= i) &&  (i > 9)).length
+                chestClear = await bot.openChestPromise(chestBlockClear);
+                count = Math.min(free_slots * 64, chestClear.window.slots.filter(r => r).reduce((acc, nxt) => acc + (nxt.type === 103 ? nxt.count : 0), 0))
+                console.log(count)
+                await chestClear.withdrawPromise(103, null, count)
+                await chestClear.closePromise()
+
+                // Продажа
+                let p = new Promise((resolve, reject) => {
+                    bot.waitWindowPromise((window) => {
+                        if (window.title.indexOf("Магазин обменник") > -1) {
+                            return true
+                        } else {
+                            return false
+                        }
+                    }, () => bot.chat("/shop exchanger2")).then(window => {
+                        bot.clickWindowPromise(15, 2, 3).then(() => {
+                            bot.closeWindowPromise(window).then(() => {
+                                resolve()
+                            })
+                        })
+                    })
+                })
+                await p
+
+                // Складывание результата
+                chestPut = await bot.openChestPromise(chestBlockPut);
+                free_slots = chestPut.window.slots.filter((r, i) => r === null && 0 <= i <= 53).length
+                await chestPut.depositPromise(388, null, Math.min(free_slots * 64, bot.inventory.count(388)))
+                await chestPut.closePromise()
+            }
+        }
+
+        function dropAll() {
             var p = Promise.resolve();
             bot.inventory.slots.forEach(r => {
                 if (r) {
-                    p = p.then(() => new Promise(drop(r)), () => new Promise(drop(r)));
+                    p = p.then(() => bot.tossStackPromise(r));
                 }
             })
         }
@@ -265,37 +408,40 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
 
         function sellMelons() {
             if (bot.currentWindow?.title.indexOf("Магазин обменник") > -1) {
-                if (bot.inventory.count(103) > 8) {
+                bot.clickWindow(15, 2, 3, () => {
                     bot.clickWindow(15, 2, 3, () => {
-                        bot.closeWindow(bot.currentWindow)
+                        bot.clickWindow(15, 2, 3, () => {
+                            bot.clickWindow(15, 2, 3, () => {
+                                bot.clickWindow(15, 2, 3, () => {
+                                    bot.clickWindow(15, 2, 3, () => {
+                                        bot.closeWindow(bot.currentWindow)
+                                    })
+                                })
+                            })
+                        })
                     })
-                }
+                })
             } else {
                 bot.chat("/shop exchanger2")
             }
         }
 
-        bot.on("windowClose", (window) => {
+        function switchSelling() {
+            chest_selling = !chest_selling
+        }
+
+
+        /*bot.on("windowClose", (window) => {
             if (window.title.indexOf("Магазин обменник") > -1) {
                 if (bot.inventory.count(388) > 1) {
                     let l = []
                     bot.inventory.slots.filter(r => r).filter(r => r.type === 388).forEach(r => l.push(r))
-
-                    function drop() {
-                        let item = l.pop()
-                        bot.tossStack(item, () => {
-                            if (l.length > 0) {
-                                drop()
-                            } else if (bot.inventory.count(103) > 8) {
-                                sellMelons()
-                            }
-                        })
-                    }
-                    drop()
                 }
             }
-        })
+        })*/
 
+        r.context.switchSelling = switchSelling
+        r.context.clearChestSellMelonsPutChest = clearChestSellMelonsPutChest
         r.context.sellMelons = sellMelons
         r.context.findDirtInPositions = findDirtInPositions
         r.context.mcData = mcData
@@ -322,13 +468,10 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                     }
                 })[0]
                 if (item) {
-                    bot.clickWindow(item.slot, 0, 0, () => {
-                    })
+                    bot.clickWindow(item.slot, 0, 0)
                 }
             } else if (window.title.indexOf("Уровень острова") > -1) {
                 sellBlocks()
-            } else if (window.title.indexOf("Магазин обменник") > -1) {
-                sellMelons()
             }
         }
 
