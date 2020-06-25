@@ -117,41 +117,45 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
 
         bot.openChestPromise = (chestBlock) => {
             return new Promise((resolve) => {
-                let chest
-                let tmp_func = (window) => {
-                    if (window.type === "minecraft:chest") {
-                        bot.removeListener("windowOpen", tmp_func)
-                        chest.window = window
-                        chest.closePromise = () => bot.closeWindowPromise(window)
-
-                        chest.depositPromise = (itemType, metadata, count) => {
-                            return new Promise(resolve1 => {
-                                chest.deposit(itemType, metadata, count, () => {
-                                    resolve1()
-                                })
+                let chest = bot.openChest(chestBlock)
+                chest.on("open", () => {
+                    chest.closePromise = () => {
+                        return new Promise(resolve1 => {
+                            chest.on("close", () => {
+                                resolve1()
                             })
-                        }
-
-                        chest.withdrawPromise = (itemType, metadata, count) => {
-                            return new Promise(resolve1 => {
-                                chest.withdraw(itemType, metadata, count, () => {
-                                    resolve1()
-                                })
-                            })
-                        }
-
-                        resolve(chest)
+                            chest.close()
+                        })
                     }
-                }
-                bot.on("windowOpen", tmp_func)
-                chest = bot.openChest(chestBlock)
+
+                    chest.depositPromise = (itemType, metadata, count) => {
+                        return new Promise(resolve1 => {
+                            chest.deposit(itemType, metadata, count, () => {
+                                resolve1()
+                            })
+                        })
+                    }
+
+                    chest.withdrawPromise = (itemType, metadata, count) => {
+                        return new Promise(resolve1 => {
+                            chest.withdraw(itemType, metadata, count, () => {
+                                resolve1()
+                            })
+                        })
+                    }
+
+                    resolve(chest)
+                })
             })
         }
 
-        bot.waitWindowPromise = (condition, initial = () => {}) => {
+        bot.waitWindowPromise = (condition, initial = () => {
+        }) => {
             return new Promise(resolve => {
+                let interval = setInterval(initial, 1000)
                 let tmp_func = (window) => {
                     if (condition(window)) {
+                        clearInterval(interval)
                         bot.removeListener("windowOpen", tmp_func)
                         resolve(window)
                     }
@@ -159,6 +163,10 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 bot.on("windowOpen", tmp_func)
                 initial()
             })
+        }
+
+        bot.placeBlockPromise = () => {
+            return new Promise()
         }
 
         const whisper_commands = [
@@ -321,45 +329,40 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
 
         async function clearChestSellMelonsPutChest(chestBlockClear, chestBlockPut) {
             chest_selling = true
-            let free_slots
             let chestClear
             let chestPut
-            let count
+            let p
+            let free_slots
+            let window
 
             // Цикл пока chest_selling
             while (chest_selling) {
-
                 // Счистка арбузов
-                free_slots = bot.inventory.slots.filter((r, i) => r === null && (45 >= i) &&  (i > 9)).length
+                free_slots = bot.inventory.slots.filter((r, i) => r === null && 9 <= i && i < 45).length
                 chestClear = await bot.openChestPromise(chestBlockClear);
-                count = Math.min(free_slots * 64, chestClear.window.slots.filter(r => r).reduce((acc, nxt) => acc + (nxt.type === 103 ? nxt.count : 0), 0))
-                console.log(count)
-                await chestClear.withdrawPromise(103, null, count)
+                await chestClear.withdrawPromise(103, null, free_slots * 64)
                 await chestClear.closePromise()
 
                 // Продажа
-                let p = new Promise((resolve, reject) => {
-                    bot.waitWindowPromise((window) => {
-                        if (window.title.indexOf("Магазин обменник") > -1) {
-                            return true
-                        } else {
-                            return false
-                        }
-                    }, () => bot.chat("/shop exchanger2")).then(window => {
-                        bot.clickWindowPromise(15, 2, 3).then(() => {
-                            bot.closeWindowPromise(window).then(() => {
-                                resolve()
-                            })
-                        })
-                    })
-                })
-                await p
+                window = await bot.waitWindowPromise((window) => {
+                    if (window.title.indexOf("Магазин обменник") > -1) {
+                        return true
+                    } else {
+                        return false
+                    }
+                }, () => bot.chat("/shop exchanger2"))
 
-                // Складывание результата
+                //console.log(bot.inventory.count(103))
+                await bot.clickWindowPromise(15, 2, 3)
+                await bot.closeWindowPromise(window)
+
+                // Складывание результатау
                 chestPut = await bot.openChestPromise(chestBlockPut);
-                free_slots = chestPut.window.slots.filter((r, i) => r === null && 0 <= i <= 53).length
-                await chestPut.depositPromise(388, null, Math.min(free_slots * 64, bot.inventory.count(388)))
+                await chestPut.depositPromise(388, null, 36 * 64)
                 await chestPut.closePromise()
+                await (new Promise((resolve) => {
+                    setTimeout(() => {resolve()}, 1000)
+                }))
             }
         }
 
