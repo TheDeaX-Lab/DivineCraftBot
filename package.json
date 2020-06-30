@@ -12,6 +12,7 @@
     "mineflayer-navigate": "^0.0.10",
     "mineflayer-tps": "^1.0.1",
     "pngjs-image": "^0.11.7",
+    "socks-client": "^1.1.4",
     "terminal-kit": "^1.35.7",
     "vec3": "^0.1.5"
   }

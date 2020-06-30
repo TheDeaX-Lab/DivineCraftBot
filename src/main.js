@@ -14,15 +14,14 @@ let connection_interval = null
 let chest_selling = false
 
 const accounts = require("../accounts.json")
-/*
-let c = 0
-if (process.argv.length >= 3) {
-    try {
-        c = parseInt(process.argv[2])
-    } catch (e) {
-        throw e
-    }
-}*/
+const directions = {
+    UP: vec3(0, 1, 0),
+    DOWN: vec3(0, -1, 0),
+    POSITIVE_X: vec3(1, 0, 0),
+    NEGATIVE_X: vec3(-1, 0, 0),
+    POSITIVE_Z: vec3(0, 0, 1),
+    NEGATIVE_Z: vec3(0, 0, -1)
+}
 
 term.green("Выберите аккаунт:\n")
 term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnexpectedKey: true}, (error, response) => {
@@ -46,7 +45,16 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
         checkTimeoutInterval: 60 * 5 * 1000
     }
 
+    function sleepPromise(ms) {
+        return new Promise(resolve => {
+            setTimeout(resolve, ms)
+        })
+    }
+
+    let blocksDig = []
+
     const bot = mineflayer.createBot(options);
+    let configFile = `${bot.username}-config.json`
 
     const r = repl.start(" > ")
     bind_bot(bot)
@@ -165,8 +173,44 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             })
         }
 
-        bot.placeBlockPromise = () => {
-            return new Promise()
+        bot.placeBlockPromise = (referenceBlock, faceVector) => {
+            return new Promise(resolve => {
+                bot.placeBlock(referenceBlock, faceVector, () => {
+                    resolve()
+                })
+            })
+        }
+
+        bot.activateBlockPromise = (block) => {
+            return new Promise((resolve, reject) => {
+                bot.activateBlock(block, err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
+        }
+
+        bot.lookPromise = (yaw, pitch) => {
+            return new Promise((resolve, reject) => {
+                bot.look(yaw, pitch, null, () => {
+                    resolve()
+                })
+            })
+        }
+
+        bot.digPromise = (block) => {
+            return new Promise((resolve, reject) => {
+                bot.dig(block, err => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve()
+                    }
+                })
+            })
         }
 
         const whisper_commands = [
@@ -174,7 +218,6 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 command: "подойди",
                 func(username) {
                     const target = bot.players[username].entity;
-                    way_data.setData(username, target.position, target.pitch, target.yaw)
                     bot.navigate.to(target.position)
                 }
             },
@@ -211,25 +254,6 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 }
             }
         ]
-        let configFile = `${bot.username}-config.json`
-        let way_data = {
-            username: null,
-            path: null,
-            yaw: null,
-            pitch: null,
-            clear() {
-                this.username = null
-                this.path = null
-                this.pitch = null
-                this.yaw = null
-            },
-            setData(username, path, pitch, yaw) {
-                this.username = username
-                this.path = path
-                this.pitch = pitch
-                this.yaw = yaw
-            }
-        }
         let mcData = require('minecraft-data')(bot.version)
 
         function clickCompas() {
@@ -264,27 +288,53 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             }
         }, 1000)
 
-        let refreshDig = false
+        let refreshDig = true
 
-        function digGenerator() {
-            if (bot.scoreboard?.["1"]?.title.indexOf("SkyBlock") === -1) {
-                refreshDig = false
-            }
-            if (!refreshDig) {
-                return
-            }
-            try {
-                let block = bot.blockInSight(0, 0)
-                bot.dig(block, err => {
-                    if (err) console.error(err)
-                    else {
-                        digGenerator()
+        async function digGenerator() {
+            let errors = 0
+            let interval = setInterval(() => {
+                errors = 0
+            }, 1000)
+            // Копалка разрешена
+            while (refreshDig) {
+                if (errors >= 10) {
+                    clearInterval(interval)
+                    break
+                }
+                let posBlock = blocksDig.shift()
+                blocksDig.push(posBlock)
+                let block = bot.blockAt(vec3(posBlock))
+                if (block) {
+                    try {
+                        await bot.digPromise(block)
+                    } catch (e) {
+                        console.error(e)
+                        await sleepPromise(50)
+                        errors++;
                     }
-                })
-            } catch (e) {
-                console.error(e)
-                setTimeout(digGenerator, 2000)
+                } else {
+                    await sleepPromise(50)
+                }
             }
+        }
+
+        function getCoordinatesTrampledDirt(x1,y1,z1, x2,y2,z2) {
+            let str = ""
+            for (let j = y1; j <= y2; j++) {
+                for (let i = x1; i <= x2; i++) {
+                    for (let k = z1; k <= z2; k++) {
+                        let pos = vec3(i, j, k)
+                        let block = bot.blockAt(pos)
+                        if (block && block.type === 3 && Math.abs(k) % 2 === 1) {
+                            str += pos + "\n"
+                        }
+                    }
+
+                }
+            }
+            fs.writeFile("blocks.txt", str, () => {
+                console.log("Запись завершена")
+            })
         }
 
         async function startFish() {
@@ -360,9 +410,7 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                 chestPut = await bot.openChestPromise(chestBlockPut);
                 await chestPut.depositPromise(388, null, 36 * 64)
                 await chestPut.closePromise()
-                await (new Promise((resolve) => {
-                    setTimeout(() => {resolve()}, 1000)
-                }))
+                await sleepPromise(1000)
             }
         }
 
@@ -391,20 +439,58 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             }
         }
 
-        function findDirtInPositions() {
-            let p = Promise.resolve();
+        async function teleportToPosition(pos) {
+            let bot_pos = bot.entity.position
+            let step = 1
+            while (!bot_pos.floored().equals(pos.floored())) {
+                let dx, dy, dz, s
+                dx = pos.x - bot_pos.x
+                dy = pos.y - bot_pos.y
+                dz = pos.z - bot_pos.z
+                s = Math.abs(dx) + Math.abs(dy) + Math.abs(dz)
+                bot_pos.add(vec3(dx / s, dy / s, dz / s))
+                await sleepPromise(50)
+            }
+            console.log("Прибыл")
+        }
 
-            function blockSeed(block) {
-                return (resolve) => {
-                    bot.equip(mcData.items[293], "hand", () => {
-                        bot.activateBlock(block, () => {
-                            bot.equip(mcData.items[362], "hand", () => {
-                                bot.activateBlock(block, () => {
-                                    resolve()
-                                })
-                            })
-                        })
-                    })
+        function getBlockForButton(block) {
+            let pos = block.position
+            let direction, left, right
+            switch (block.metadata) {
+                case 2:
+                    direction = directions.NEGATIVE_Z
+                    left = directions.NEGATIVE_X
+                    right = directions.POSITIVE_X
+                    break
+                case 3:
+                    direction = directions.POSITIVE_Z
+                    left = directions.POSITIVE_X
+                    right = directions.NEGATIVE_X
+                    break
+                case 4:
+                    direction = directions.NEGATIVE_X
+                    left = directions.POSITIVE_Z
+                    right = directions.NEGATIVE_Z
+                    break
+                case 5:
+                    direction = directions.POSITIVE_X
+                    left = directions.NEGATIVE_Z
+                    right = directions.POSITIVE_Z
+                    break
+            }
+            if (bot.blockAt(pos.plus(left)).type === 165 || bot.blockAt(pos.plus(direction)).type === 165 || bot.blockAt(pos.plus(right)).type === 165) {
+                return block
+            } else {
+                let new_pos = pos.plus(direction).plus(direction)
+                let leftblock = bot.blockAt(new_pos.plus(left))
+                let rightblock = bot.blockAt(new_pos.plus(right))
+                if (leftblock?.type === 29) {
+                    return leftblock
+                } else if (rightblock?.type === 29) {
+                    return rightblock
+                } else {
+                    return block
                 }
             }
         }
@@ -433,20 +519,79 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             chest_selling = !chest_selling
         }
 
+        async function goToPathPromise(pos) {
+            return new Promise(resolve => {
+                let tmp_func = () => {
+                    bot.navigate.removeListener("arrived", tmp_func)
+                    resolve()
+                }
+                bot.navigate.on('arrived', tmp_func);
+                bot.navigate.to(pos)
+            })
+        }
 
-        /*bot.on("windowClose", (window) => {
-            if (window.title.indexOf("Магазин обменник") > -1) {
-                if (bot.inventory.count(388) > 1) {
-                    let l = []
-                    bot.inventory.slots.filter(r => r).filter(r => r.type === 388).forEach(r => l.push(r))
+        async function restoreCombines(x0, x, y0, y, z, yOffset, homePosition) {
+            while (!(bot.entity.position.y - 1 < homePosition.y && homePosition.y < bot.entity.position.y + yOffset)) {
+                if (bot.entity.position.y > homePosition.y) {
+                    bot.entity.position.add(vec3(0, -yOffset, 0))
+                } else {
+                    bot.entity.position.add(vec3(0, yOffset, 0))
+                }
+                await sleepPromise(500)
+            }
+            await goToPathPromise(homePosition)
+            let blockPos = []
+            for (let j = y0; j <= y; j += yOffset) {
+                console.log(j)
+                for (let k = x0; k <= x; k++) {
+                    let block = bot.blockAt(vec3(k, j, z))
+                    if (block?.type === 29) {
+                        blockPos.push(block.position.floored())
+                        break
+                    }
                 }
             }
-        })*/
+            await sleepPromise(2000)
+            for (let i = 0; i < blockPos.length; i++) {
+                console.log(i)
+                try {
+                    let block = bot.blockAt(blockPos[i])
+                    if (block?.type === 29) {
+                        let blockForButton = getBlockForButton(block)
+                        while (!(bot.entity.position.y < blockForButton.position.y && blockForButton.position.y < bot.entity.position.y + yOffset)) {
+                            console.log(bot.entity.position, blockForButton.position)
+                            if (bot.entity.position.y > blockForButton.position.y) {
+                                bot.entity.position.add(vec3(0, -yOffset, 0))
+                            } else {
+                                bot.entity.position.add(vec3(0, yOffset, 0))
+                            }
+                            await sleepPromise(500)
+                        }
+                        await goToPathPromise(homePosition.floored().set(blockForButton.position.x, bot.entity.position.y, bot.entity.position.z))
+                        await bot.placeBlockPromise(blockForButton, directions.UP)
+                        await bot.activateBlockPromise(bot.blockAt(blockForButton.position.plus(directions.UP)))
+                        await goToPathPromise(homePosition.floored().set(homePosition.x, bot.entity.position.y, bot.entity.position.z))
+                    }
+                } catch (e) {
+                    console.error(e)
+                }
+            }
+            while (!(bot.entity.position.y - 1 < homePosition.y && homePosition.y < bot.entity.position.y + yOffset)) {
+                if (bot.entity.position.y > homePosition.y) {
+                    bot.entity.position.add(vec3(0, -yOffset, 0))
+                } else {2
+                    bot.entity.position.add(vec3(0, yOffset, 0))
+                }
+                await sleepPromise(500)
+            }
+        }
 
+        r.context.restoreCombines = restoreCombines
+        r.context.teleportToPosition = teleportToPosition
+        r.context.getBlockForButton = getBlockForButton
         r.context.switchSelling = switchSelling
         r.context.clearChestSellMelonsPutChest = clearChestSellMelonsPutChest
         r.context.sellMelons = sellMelons
-        r.context.findDirtInPositions = findDirtInPositions
         r.context.mcData = mcData
         r.context.sellBlocks = sellBlocks
         r.context.setTarget = setTarget
@@ -503,22 +648,36 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                             fs.readFile(configFile, (err, data) => {
                                 if (err) console.log(err)
                                 else {
-                                    const {yaw, pitch, target, slot} = JSON.parse(data) || {}
-                                    bot.look(yaw, pitch)
+                                    let p = Promise.resolve()
+                                    const {slot, yaw, pitch, clearChestBlock, putChestBlock, target, blocksToDig} = JSON.parse(data) || {}
+                                    if (yaw && pitch) {
+                                        p = p.then(() => bot.lookPromise(yaw, pitch))
+                                    }
                                     if (slot) {
                                         bot.setQuickBarSlot(slot)
                                     }
-                                    let whisper_command = whisper_commands.filter(r => r.command === target)[0]
-                                    if (whisper_command) {
-                                        setTimeout(whisper_command.func, 5000)
+                                    if (blocksToDig) {
+                                        blocksDig = blocksToDig
+                                    }
+                                    if (clearChestBlock && putChestBlock && target === "продажа") {
+                                        p = p.then(() => clearChestSellMelonsPutChest(bot.blockAt(vec3(clearChestBlock)), bot.blockAt(vec3(putChestBlock))))
+                                    } else if (target) {
+                                        let whisper_command = whisper_commands.filter(r => r.command === target)[0]
+                                        if (whisper_command) {
+                                            p = p.then(whisper_command.func)
+                                        }
                                     }
                                 }
                             })
                         } else if (text_splited[3].startsWith("hub")) {
+                            refreshDig = false
+                            bot.stopDigging()
                             if (!connection_interval) {
                                 switchConnection()
                             }
                         } else if (text_splited[3].startsWith("limbo")) {
+                            refreshDig = false
+                            bot.stopDigging()
                             bot.setQuickBarSlot(4)
                             bot.activateItem()
                             bot.setQuickBarSlot(0)
@@ -526,7 +685,7 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                     }
                     messageJson.extra.forEach(msg => {
                         let t = term
-                        let {text, color, bold, ...other} = msg;
+                        let {text, color, bold, italic, ...other} = msg;
                         if (color) {
                             t = t.colorRgbHex({
                                 black: '#000',
@@ -551,6 +710,9 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
                             if (bold) {
                                 t = t.bold
                             }
+                            if (italic) {
+                                t = t.italic
+                            }
                             t(text)
                         } catch {
                             console.log(msg)
@@ -569,18 +731,16 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
 
         bot.on("kicked", reason => console.error(reason))
 
-        function onScoreboardUpdate(scoreBoard) {
-        }
 
         bot.on("end", () => {
             if (connection_interval) {
                 switchConnection()
             }
+            refreshDig = false
+            bot.removeAllListeners()
             bot = mineflayer.createBot(options);
             bind_bot(bot)
         })
-
-        bot.on("scoreboardCreated", onScoreboardUpdate)
 
         bot._client.on("map", packet => {
             require('./map.js')(packet.data).writeImage('./map.png', () => {
@@ -588,22 +748,5 @@ term.singleColumnMenu(accounts.map((r, i) => `${i}. ${r.username}`), {exitOnUnex
             })
             console.log("Введите капчу:")
         })
-
-        bot.navigate.on('pathFound', function (path) {
-            //bot.chat(`/msg ${way_data.username} Путь найден. Добираться до него ${path.length} шагов.`);
-        });
-
-        bot.navigate.on('cannotFind', function (closestPath) {
-            //bot.chat(`/msg ${way_data.username} Я не нашёл путь до него...`);
-            bot.navigate.walk(closestPath);
-            bot.look(way_data.yaw, way_data.pitch)
-            way_data.clear()
-        });
-
-        bot.navigate.on('arrived', function () {
-            //bot.chat(`/msg ${way_data.username} Я добрался до точки назначения`);
-            bot.look(way_data.yaw, way_data.pitch)
-            way_data.clear()
-        });
     }
 })
